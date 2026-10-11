@@ -1,79 +1,82 @@
-# Stock Monthly Analytics Pipeline
+# Monthly Stock Analyzer
 
-Python + Pandas data-engineering pipeline that transforms daily OHLCV stock data into monthly summaries, calculates technical indicators, and writes one validated CSV per ticker.
+Python and Pandas pipeline that converts daily OHLCV stock data into monthly summaries, calculates technical indicators, and writes one CSV file per ticker.
 
-This repository implements the Data Engineering Intern hiring assignment described in the project PRD.
+Built for the Data Engineering Intern hiring assignment.
 
 ## Objective
 
-Read a master CSV of daily prices for 10 stocks (January 2018–December 2019), aggregate each ticker to calendar-month OHLCV records, compute SMA/EMA/Z-score/Donchian/Bollinger indicators on the monthly series, and export:
+Given two years of daily prices for 10 tickers (January 2018 through December 2019):
+
+1. Aggregate daily rows into monthly OHLCV records.
+2. Calculate SMA, EMA, Z-score, Donchian Channels, and Bollinger Bands on the monthly series.
+3. Write exactly 10 partitioned result files (`24` rows × `18` columns each).
+
+## Dataset
+
+Source repository: [sandeep-tt/tt-intern-dataset](https://github.com/sandeep-tt/tt-intern-dataset)
+
+Place the downloaded file at:
 
 ```text
-output/result_{SYMBOL}.csv
+data/output_file.csv
 ```
 
-Exactly 10 files × 24 rows × 18 columns.
-
-## Dataset source
-
-Public assignment dataset:
-
-- Repository: [https://github.com/sandeep-tt/tt-intern-dataset](https://github.com/sandeep-tt/tt-intern-dataset)
-- Expected local path after download: `data/output_file.csv`
-
-Expected input columns:
+Input columns:
 
 ```text
 date, volume, open, high, low, close, adjclose, ticker
 ```
 
-Expected tickers:
+Tickers:
 
 ```text
 AAPL, AMD, AMZN, AVGO, CSCO, MSFT, NFLX, PEP, TMUS, TSLA
 ```
 
-The pipeline never modifies the source CSV. If you redistribute this project, confirm whether the dataset itself should be committed or fetched from the public source above.
+The pipeline never modifies the source CSV.
 
 ## Prerequisites
 
 - Python 3.10+
-- Pandas only as the direct third-party dependency (`requirements.txt`)
+- Pandas (see `requirements.txt`)
 
 ## Installation
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Place `output_file.csv` under `data/` (see dataset source above).
-
-## Run the complete pipeline
+On Windows, activate with:
 
 ```bash
-python stock_pipeline.py \
-  --input data/output_file.csv \
-  --output-dir output
+.venv\Scripts\activate
+```
+
+## Run the pipeline
+
+```bash
+python stock_pipeline.py --input data/output_file.csv --output-dir output
 ```
 
 | Argument | Default | Meaning |
-|---|---|---|
-| `--input` | `data/output_file.csv` | Daily source CSV |
-| `--output-dir` | `output` | Destination for `result_*.csv` |
+| --- | --- | --- |
+| `--input` | `data/output_file.csv` | Path to the daily source CSV |
+| `--output-dir` | `output` | Directory for `result_*.csv` files |
 
 ### Pipeline stages
 
 1. Load and validate daily input.
 2. Aggregate to monthly OHLCV per ticker.
-3. Validate monthly coverage (10 × 24 = 240 rows).
-4. Calculate all **10** indicator columns per ticker.
+3. Validate monthly coverage (`10` tickers × `24` months = `240` rows).
+4. Calculate all 10 indicator columns per ticker.
 5. Validate the indicator DataFrame.
 6. Stage-write all 10 CSVs, validate on disk, then promote into `--output-dir`.
 7. Remove obsolete unexpected `result_*.csv` files only (unrelated files are kept).
 
-On any critical failure the process exits nonzero and does **not** print a success message.
+On any critical failure the process exits with a nonzero status and does not print a success message.
 
 ## Expected outputs
 
@@ -91,61 +94,136 @@ output/
 └── result_TSLA.csv
 ```
 
-### Output schema (exact order, 18 columns)
+### Output schema (exact column order)
 
 ```text
-date, ticker, open, high, low, close, volume, adjclose,
-sma_10, sma_20, ema_10, ema_20, zscore_20,
-donchian_high_20, donchian_low_20,
-bollinger_mid_20, bollinger_upper_20, bollinger_lower_20
+date
+ticker
+open
+high
+low
+close
+volume
+adjclose
+sma_10
+sma_20
+ema_10
+ema_20
+zscore_20
+donchian_high_20
+donchian_low_20
+bollinger_mid_20
+bollinger_upper_20
+bollinger_lower_20
 ```
 
-- Dates are `YYYY-MM-DD` calendar month-ends from `2018-01-31` through `2019-12-31`.
-- Missing warm-up indicators are empty CSV fields (not `0`, `"NaN"`, or `"None"`).
-- Numeric values are written without cosmetic two-decimal rounding.
+- Dates use `YYYY-MM-DD` calendar month-ends from `2018-01-31` through `2019-12-31`.
+- Missing warm-up indicators are empty CSV fields (not `0`, `NaN`, or `None` text).
+- Numeric values are preserved without cosmetic two-decimal rounding.
 
 ## Monthly OHLCV aggregation
 
 | Field | Rule |
-|---|---|
-| `open` | First trading day's open |
-| `high` | Max daily high |
-| `low` | Min daily low |
-| `close` | Last trading day's close |
-| `volume` | Sum of daily volume |
-| `adjclose` | Last trading day's adjusted close |
-| `date` | Calendar month-end |
+| --- | --- |
+| open | Opening price on the first trading day of the month |
+| high | Maximum daily high during the month |
+| low | Minimum daily low during the month |
+| close | Closing price on the last trading day of the month |
+| volume | Sum of daily volume |
+| adjclose | Adjusted close on the last trading day of the month |
+| date | Calendar month-end date |
 
-Rows are sorted by ticker/date before first/last snapshots so file order cannot distort results. Tickers are aggregated independently.
+Rows are sorted by ticker and date before first/last snapshots so file order cannot distort results. Each ticker is aggregated independently.
 
-## Technical indicators (monthly windows)
+## Technical indicators
 
-| Column | Formula / convention |
-|---|---|
-| `sma_10` / `sma_20` | `close.rolling(n, min_periods=n).mean()` |
-| `ema_10` / `ema_20` | `alpha = 2/(n+1)`; first EMA = SMA of first complete window; then `EMA_t = alpha*close_t + (1-alpha)*EMA_{t-1}` |
-| `zscore_20` | `(close - mean_20) / std_20` with sample std (`ddof=1`); missing if std is 0 |
-| `donchian_high_20` | 20-month rolling max of monthly `high` |
-| `donchian_low_20` | 20-month rolling min of monthly `low` |
-| `bollinger_mid_20` | 20-month SMA of `close` |
-| `bollinger_upper_20` / `bollinger_lower_20` | mid ± `2 * std_20` |
+All windows are measured in months, not days. Indicators are calculated independently for each ticker after monthly aggregation.
 
-### Expected warm-up missingness (24 months/ticker)
+### Simple Moving Averages
 
-| Indicator | Valid / ticker | Missing / ticker |
-|---|---:|---:|
-| SMA/EMA 10 | 15 | 9 |
-| SMA/EMA 20, Donchian, Bollinger | 5 | 19 |
-| Z-score 20 | up to 5 | ≥ 19 |
+```text
+sma_10 = close.rolling(window=10, min_periods=10).mean()
+sma_20 = close.rolling(window=20, min_periods=20).mean()
+```
 
-Warm-up rows are retained.
+### Exponential Moving Averages (SMA-seeded)
+
+Smoothing factor:
+
+```text
+alpha = 2 / (period + 1)
+```
+
+Recurrence:
+
+```text
+EMA_t = alpha * close_t + (1 - alpha) * EMA_previous
+```
+
+Initialization:
+
+1. Leave EMA missing until the first complete window exists.
+2. Set the first valid EMA equal to the SMA of that window.
+3. Apply the recurrence for every later month.
+
+This matches the assignment guidance that the first EMA uses the SMA as its starting value. A default Pandas `ewm()` start from the first close would disagree with this convention.
+
+### Z-score
+
+```text
+zscore_20 = (close - rolling_mean_20) / rolling_std_20
+```
+
+Uses Pandas sample standard deviation (`ddof=1`). If the rolling standard deviation is zero, the Z-score is left missing instead of producing infinity.
+
+### Donchian Channels
+
+```text
+donchian_high_20 = high.rolling(window=20, min_periods=20).max()
+donchian_low_20  = low.rolling(window=20, min_periods=20).min()
+```
+
+These use monthly high and low, not close.
+
+### Bollinger Bands
+
+```text
+bollinger_mid_20   = close.rolling(window=20, min_periods=20).mean()
+bollinger_upper_20 = mid + 2 * rolling_std_20
+bollinger_lower_20 = mid - 2 * rolling_std_20
+```
+
+### Expected warm-up missing values
+
+With 24 monthly rows per ticker:
+
+| Indicator | Valid rows | Missing rows |
+| --- | ---: | ---: |
+| SMA 10 / EMA 10 | 15 | 9 |
+| SMA 20 / EMA 20 | 5 | 19 |
+| Donchian high / low | 5 each | 19 each |
+| Bollinger mid / upper / lower | 5 each | 19 each |
+| Z-score 20 | up to 5 | at least 19 |
+
+Warm-up rows are retained. They are not dropped because an indicator is still missing.
+
+## Assumptions
+
+- Indicator periods refer to months because calculations run after monthly aggregation.
+- Regular `close` (not `adjclose`) is used for close-based indicators.
+- Donchian Channels use monthly `high` and `low`.
+- Bollinger Band multiplier is `k = 2`.
+- Z-score and Bollinger Bands use a 20-month window and sample standard deviation.
+- EMA initialization uses the SMA of the first complete window, then recursive updates.
+- Output dates are calendar month-ends even when the last trading day falls earlier in the month.
+- Volume is summed; adjusted close is taken from the last trading day of the month.
 
 ## Validation behavior
 
-- Invalid input/monthly/indicator states raise clear errors.
-- Output writing validates the in-memory frame, writes a staged 10-file set, validates staged files, then promotes with per-file `os.replace`.
-- On-disk checks cover filenames, 18-column schema/order, 24 rows, ticker isolation, month-end coverage, finite numerics, and warm-up emptiness.
-- Staging prevents promoting an invalid complete set. A hard interrupt during promotion could still leave a mixed destination set (OS limitation); rerun the pipeline to repair.
+- Invalid input, monthly, or indicator states raise clear errors.
+- Output writing validates the in-memory frame, writes a staged 10-file set, validates staged files, then promotes each file with `os.replace`.
+- On-disk checks cover filenames, schema order, 24 rows, ticker isolation, month-end coverage, finite numerics, and warm-up emptiness.
+- Staging prevents promoting an invalid complete set. A hard interrupt during promotion could still leave a mixed destination set; rerun the pipeline to repair.
 
 ## Tests
 
@@ -153,19 +231,9 @@ Warm-up rows are retained.
 python -m unittest discover -s tests -v
 ```
 
-## Acceptance checklist
+## Example successful run
 
-- [x] Required input columns validated; invalid/missing/duplicate/OHLC-broken inputs rejected
-- [x] All 10 expected tickers processed for Jan 2018–Dec 2019
-- [x] Monthly open/high/low/close/volume/adjclose follow first/max/min/last/sum/last rules
-- [x] All 10 indicator columns implemented with documented formulas (SMA-seeded EMA)
-- [x] Exactly 10 `result_{SYMBOL}.csv` files, each 24×18
-- [x] Warm-up missing values preserved as empty fields
-- [x] Source dataset left unchanged
-- [x] Automated tests cover validation, aggregation, indicators, outputs, and independent recomputation
-- [x] Assignment result CSVs are not gitignored (`output/result_*.csv` is trackable)
-
-## Example successful run (illustrative shape; counts from the supplied dataset)
+Illustrative summary shape using the supplied dataset:
 
 ```text
 === Stock Monthly Analytics Pipeline Summary ===
@@ -185,9 +253,21 @@ SUCCESS: Full pipeline completed. All output CSV files were generated and valida
 
 ```text
 .
-├── data/output_file.csv          # obtain from dataset source if absent
-├── output/result_*.csv           # generated deliverables (trackable)
-├── tests/test_stock_pipeline.py
+├── data/
+│   └── output_file.csv
+├── output/
+│   ├── result_AAPL.csv
+│   ├── result_AMD.csv
+│   ├── result_AMZN.csv
+│   ├── result_AVGO.csv
+│   ├── result_CSCO.csv
+│   ├── result_MSFT.csv
+│   ├── result_NFLX.csv
+│   ├── result_PEP.csv
+│   ├── result_TMUS.csv
+│   └── result_TSLA.csv
+├── tests/
+│   └── test_stock_pipeline.py
 ├── stock_pipeline.py
 ├── requirements.txt
 ├── README.md
